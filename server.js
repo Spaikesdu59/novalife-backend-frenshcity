@@ -13,6 +13,8 @@ const {
   PUBLIC_URL,
   JWT_SECRET,
   FRONTEND_URL,
+  PLUGIN_API_URL,   // ex: https://xxxx.trycloudflare.com (tunnel) ou l'adresse définitive une fois hébergé
+  PLUGIN_API_KEY,   // même clé que ApiKey dans webapi_config.json côté plugin
   PORT = 3000
 } = process.env;
 
@@ -50,7 +52,14 @@ const steamRelyingParty = new RelyingParty(
 );
 
 function creerSessionToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  // ✅ CORRIGÉ : quand on fusionne une session existante (via ...sessionExistante)
+  // avec de nouvelles infos, le payload décodé contient déjà "exp" (et "iat"),
+  // ajoutés automatiquement par jwt.sign() la première fois. Réutiliser ce
+  // payload tel quel avec { expiresIn } fait planter jsonwebtoken avec
+  // l'erreur "Bad options.expiresIn option the payload already has an exp
+  // property." — on retire donc ces 2 champs avant de re-signer.
+  const { exp, iat, ...payloadPropre } = payload;
+  return jwt.sign(payloadPropre, JWT_SECRET, { expiresIn: '7d' });
 }
 
 function lireSession(req) {
@@ -214,6 +223,48 @@ app.get('/api/me', (req, res) => {
 app.post('/auth/logout', (req, res) => {
   res.clearCookie('session', cookieOptions);
   res.json({ ok: true });
+});
+
+// ================= PERSONNAGES (plugin jeu) =================
+
+// Le site demande "quels sont mes personnages en jeu ?"
+// L'adresse du plugin (PLUGIN_API_URL) est configurable : un tunnel
+// temporaire pendant les tests sur PC, puis l'adresse définitive une fois
+// un vrai hébergeur en place — aucun changement de code nécessaire, juste
+// la variable d'environnement à mettre à jour sur Render.
+app.get('/api/characters', async (req, res) => {
+  const session = lireSession(req);
+  if (!session || !session.discordId) {
+    return res.status(401).json({ error: 'not_connected' });
+  }
+  if (!session.steamId) {
+    return res.status(400).json({ error: 'steam_not_linked' });
+  }
+
+  if (!PLUGIN_API_URL || !PLUGIN_API_KEY) {
+    console.error('❌ PLUGIN_API_URL ou PLUGIN_API_KEY manquant dans les variables d\'environnement.');
+    return res.status(503).json({ error: 'plugin_not_configured' });
+  }
+
+  try {
+    const pluginRes = await fetch(
+      `${PLUGIN_API_URL}/characters?steamid=${session.steamId}`,
+      { headers: { 'X-Api-Key': PLUGIN_API_KEY } }
+    );
+
+    if (!pluginRes.ok) {
+      console.error(`Erreur plugin jeu : statut ${pluginRes.status}`);
+      return res.status(502).json({ error: 'plugin_unreachable' });
+    }
+
+    const data = await pluginRes.json();
+    res.json(data);
+  } catch (err) {
+    // Le cas le plus courant : le serveur de jeu (ou le tunnel) est
+    // simplement éteint/hors ligne en ce moment — pas une vraie erreur.
+    console.error('Erreur contact plugin jeu :', err.message);
+    res.status(503).json({ error: 'game_server_offline' });
+  }
 });
 
 app.listen(PORT, () => {
