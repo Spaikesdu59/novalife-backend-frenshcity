@@ -247,6 +247,9 @@ app.get('/api/characters', async (req, res) => {
   }
 
   try {
+    // 🐛 DEBUG TEMPORAIRE : à retirer une fois le souci du statut 400 résolu
+    console.log('DEBUG steamId envoyé au plugin :', JSON.stringify(session.steamId));
+
     const pluginRes = await fetch(
       `${PLUGIN_API_URL}/characters?steamid=${session.steamId}`,
       { headers: { 'X-Api-Key': PLUGIN_API_KEY } }
