@@ -278,6 +278,74 @@ app.get('/api/characters', async (req, res) => {
   }
 });
 
+// Le site demande "quels véhicules je possède ?"
+app.get('/api/vehicles', async (req, res) => {
+  const session = lireSession(req);
+  if (!session || !session.discordId) {
+    return res.status(401).json({ error: 'not_connected' });
+  }
+  if (!session.steamId) {
+    return res.status(400).json({ error: 'steam_not_linked' });
+  }
+
+  if (!PLUGIN_API_URL || !PLUGIN_API_KEY) {
+    console.error('❌ PLUGIN_API_URL ou PLUGIN_API_KEY manquant dans les variables d\'environnement.');
+    return res.status(503).json({ error: 'plugin_not_configured' });
+  }
+
+  try {
+    const pluginRes = await fetch(
+      `${PLUGIN_API_URL}/vehicles?steamid=${session.steamId}`,
+      { headers: { 'X-Api-Key': PLUGIN_API_KEY } }
+    );
+
+    if (!pluginRes.ok) {
+      console.error(`Erreur plugin jeu (vehicles) : statut ${pluginRes.status}`);
+      return res.status(502).json({ error: 'plugin_unreachable' });
+    }
+
+    const data = await pluginRes.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Erreur contact plugin jeu (vehicles) :', err.message);
+    res.status(503).json({ error: 'game_server_offline' });
+  }
+});
+
+// Le site demande "quels terrains je possède ?"
+app.get('/api/areas', async (req, res) => {
+  const session = lireSession(req);
+  if (!session || !session.discordId) {
+    return res.status(401).json({ error: 'not_connected' });
+  }
+  if (!session.steamId) {
+    return res.status(400).json({ error: 'steam_not_linked' });
+  }
+
+  if (!PLUGIN_API_URL || !PLUGIN_API_KEY) {
+    console.error('❌ PLUGIN_API_URL ou PLUGIN_API_KEY manquant dans les variables d\'environnement.');
+    return res.status(503).json({ error: 'plugin_not_configured' });
+  }
+
+  try {
+    const pluginRes = await fetch(
+      `${PLUGIN_API_URL}/areas?steamid=${session.steamId}`,
+      { headers: { 'X-Api-Key': PLUGIN_API_KEY } }
+    );
+
+    if (!pluginRes.ok) {
+      console.error(`Erreur plugin jeu (areas) : statut ${pluginRes.status}`);
+      return res.status(502).json({ error: 'plugin_unreachable' });
+    }
+
+    const data = await pluginRes.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Erreur contact plugin jeu (areas) :', err.message);
+    res.status(503).json({ error: 'game_server_offline' });
+  }
+});
+
 // ================= NOUVEAUTÉS (annonces / patch notes) =================
 //
 // Stockage persistant via l'API GitHub : les données (admins + annonces)
