@@ -4,8 +4,6 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { RelyingParty } = require('openid');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 
 const {
@@ -282,44 +280,105 @@ app.get('/api/characters', async (req, res) => {
 
 // ================= NOUVEAUTÉS (annonces / patch notes) =================
 //
-// ⚠️ Stockage simple sur disque, PAS une vraie base de données : ce fichier
-// vit dans le système de fichiers du service Render. Sur le plan gratuit,
-// ce disque n'est pas garanti persistant sur le long terme (un redeploy ou
-// certains redémarrages peuvent le réinitialiser). Suffisant pour un usage
-// occasionnel sur un petit serveur RP, mais à garder en tête.
+// Stockage persistant via l'API GitHub : les données (admins + annonces)
+// sont sauvegardées comme un vrai fichier JSON dans un dépôt GitHub, via de
+// vrais commits. Gratuit, et ça survit à tous les redémarrages/redeploys de
+// Render puisque ça ne dépend plus du disque du service.
+//
+// Variables d'environnement nécessaires :
+//   GITHUB_TOKEN      -> Personal Access Token GitHub avec accès en écriture au dépôt
+//   GITHUB_REPO       -> "ton-pseudo/nom-du-depot" (le dépôt qui contient déjà server.js)
+//   GITHUB_BRANCH     -> branche à utiser (optionnel, défaut "main")
+//   GITHUB_DATA_PATH  -> chemin du fichier dans le dépôt (optionnel, défaut "data/nouveautes.json")
 
-const DATA_PATH = path.join(__dirname, 'data', 'nouveautes.json');
+const {
+  GITHUB_TOKEN,
+  GITHUB_REPO,
+  GITHUB_BRANCH = 'main',
+  GITHUB_DATA_PATH = 'data/nouveautes.json'
+} = process.env;
 
-function chargerDonnees() {
+if (!GITHUB_TOKEN || !GITHUB_REPO) {
+  console.warn('⚠️ GITHUB_TOKEN ou GITHUB_REPO non configuré — les annonces Nouveautés ne pourront pas être sauvegardées.');
+}
+
+// Cache en mémoire pour éviter un aller-retour GitHub à chaque lecture.
+// Rechargé automatiquement au démarrage du service (cache vide au 1er appel).
+let cacheDonnees = null;
+let cacheSha = null;
+
+async function chargerDonnees() {
+  if (cacheDonnees) return cacheDonnees;
+
   try {
-    if (!fs.existsSync(path.dirname(DATA_PATH))) {
-      fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
-    }
-    if (!fs.existsSync(DATA_PATH)) {
+    const res = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DATA_PATH}?ref=${GITHUB_BRANCH}`,
+      { headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: 'application/vnd.github+json' } }
+    );
+
+    if (res.status === 404) {
+      // Le fichier n'existe pas encore dans le dépôt : on le crée avec des valeurs par défaut
       const initial = { admins: OWNER_DISCORD_ID ? [OWNER_DISCORD_ID] : [], announcements: [] };
-      fs.writeFileSync(DATA_PATH, JSON.stringify(initial, null, 2));
+      cacheDonnees = initial;
+      cacheSha = null;
+      await sauvegarderDonnees(initial);
       return initial;
     }
-    const brut = fs.readFileSync(DATA_PATH, 'utf-8');
-    const data = JSON.parse(brut);
-    // Le owner est toujours considéré admin, même s'il a été retiré par erreur du fichier
+
+    if (!res.ok) throw new Error(`GitHub API a répondu ${res.status}`);
+
+    const json = await res.json();
+    const contenuDecode = Buffer.from(json.content, 'base64').toString('utf-8');
+    const data = JSON.parse(contenuDecode);
+
     if (OWNER_DISCORD_ID && !data.admins.includes(OWNER_DISCORD_ID)) {
       data.admins.push(OWNER_DISCORD_ID);
     }
+
+    cacheDonnees = data;
+    cacheSha = json.sha;
     return data;
   } catch (err) {
-    console.error('Erreur lecture nouveautes.json :', err.message);
-    return { admins: OWNER_DISCORD_ID ? [OWNER_DISCORD_ID] : [], announcements: [] };
+    console.error('Erreur lecture GitHub (nouveautes.json) :', err.message);
+    return cacheDonnees || { admins: OWNER_DISCORD_ID ? [OWNER_DISCORD_ID] : [], announcements: [] };
   }
 }
 
-function sauvegarderDonnees(data) {
-  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+async function sauvegarderDonnees(data) {
+  cacheDonnees = data;
+
+  const body = {
+    message: 'Mise à jour des nouveautés FrenchCity',
+    content: Buffer.from(JSON.stringify(data, null, 2)).toString('base64'),
+    branch: GITHUB_BRANCH
+  };
+  if (cacheSha) body.sha = cacheSha;
+
+  const res = await fetch(
+    `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DATA_PATH}`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    }
+  );
+
+  if (!res.ok) {
+    const errTexte = await res.text();
+    throw new Error(`Échec sauvegarde GitHub (${res.status}) : ${errTexte}`);
+  }
+
+  const json = await res.json();
+  cacheSha = json.content.sha;
 }
 
-function estAdmin(discordId) {
+async function estAdmin(discordId) {
   if (!discordId) return false;
-  const data = chargerDonnees();
+  const data = await chargerDonnees();
   return data.admins.includes(discordId);
 }
 
@@ -355,20 +414,25 @@ async function uploaderImageVersDiscord(imageBase64, nomFichier) {
 }
 
 // --- Lecture publique des annonces ---
-app.get('/api/nouveautes', (req, res) => {
-  const data = chargerDonnees();
-  const liste = [...data.announcements].sort((a, b) => b.createdAt - a.createdAt);
-  res.json({ announcements: liste });
+app.get('/api/nouveautes', async (req, res) => {
+  try {
+    const data = await chargerDonnees();
+    const liste = [...data.announcements].sort((a, b) => b.createdAt - a.createdAt);
+    res.json({ announcements: liste });
+  } catch (err) {
+    console.error('Erreur lecture annonces :', err.message);
+    res.status(503).json({ error: 'lecture_impossible' });
+  }
 });
 
 // --- Statut admin de l'utilisateur connecté ---
-app.get('/api/nouveautes/statut-admin', (req, res) => {
+app.get('/api/nouveautes/statut-admin', async (req, res) => {
   const session = lireSession(req);
   if (!session || !session.discordId) {
     return res.json({ isAdmin: false, isOwner: false });
   }
   res.json({
-    isAdmin: estAdmin(session.discordId),
+    isAdmin: await estAdmin(session.discordId),
     isOwner: estOwner(session.discordId)
   });
 });
@@ -377,7 +441,7 @@ app.get('/api/nouveautes/statut-admin', (req, res) => {
 app.post('/api/nouveautes', async (req, res) => {
   const session = lireSession(req);
   if (!session || !session.discordId) return res.status(401).json({ error: 'not_connected' });
-  if (!estAdmin(session.discordId)) return res.status(403).json({ error: 'not_admin' });
+  if (!(await estAdmin(session.discordId))) return res.status(403).json({ error: 'not_admin' });
 
   const { title, content, imageBase64 } = req.body;
   if (!title || !content) {
@@ -390,7 +454,7 @@ app.post('/api/nouveautes', async (req, res) => {
       imageUrl = await uploaderImageVersDiscord(imageBase64, `${Date.now()}.png`);
     }
 
-    const data = chargerDonnees();
+    const data = await chargerDonnees();
     const annonce = {
       id: crypto.randomUUID(),
       title,
@@ -400,7 +464,7 @@ app.post('/api/nouveautes', async (req, res) => {
       createdAt: Date.now()
     };
     data.announcements.push(annonce);
-    sauvegarderDonnees(data);
+    await sauvegarderDonnees(data);
 
     res.json({ ok: true, announcement: annonce });
   } catch (err) {
@@ -410,30 +474,35 @@ app.post('/api/nouveautes', async (req, res) => {
 });
 
 // --- Supprimer une annonce (admin uniquement) ---
-app.delete('/api/nouveautes/:id', (req, res) => {
+app.delete('/api/nouveautes/:id', async (req, res) => {
   const session = lireSession(req);
   if (!session || !session.discordId) return res.status(401).json({ error: 'not_connected' });
-  if (!estAdmin(session.discordId)) return res.status(403).json({ error: 'not_admin' });
+  if (!(await estAdmin(session.discordId))) return res.status(403).json({ error: 'not_admin' });
 
-  const data = chargerDonnees();
-  const avant = data.announcements.length;
-  data.announcements = data.announcements.filter(a => a.id !== req.params.id);
-  if (data.announcements.length === avant) {
-    return res.status(404).json({ error: 'introuvable' });
+  try {
+    const data = await chargerDonnees();
+    const avant = data.announcements.length;
+    data.announcements = data.announcements.filter(a => a.id !== req.params.id);
+    if (data.announcements.length === avant) {
+      return res.status(404).json({ error: 'introuvable' });
+    }
+    await sauvegarderDonnees(data);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Erreur suppression annonce :', err.message);
+    res.status(500).json({ error: 'suppression_echouee' });
   }
-  sauvegarderDonnees(data);
-  res.json({ ok: true });
 });
 
 // --- Gestion de la liste des admins (owner uniquement) ---
-app.get('/api/nouveautes/admins', (req, res) => {
+app.get('/api/nouveautes/admins', async (req, res) => {
   const session = lireSession(req);
   if (!session || !estOwner(session.discordId)) return res.status(403).json({ error: 'owner_only' });
-  const data = chargerDonnees();
+  const data = await chargerDonnees();
   res.json({ admins: data.admins });
 });
 
-app.post('/api/nouveautes/admins', (req, res) => {
+app.post('/api/nouveautes/admins', async (req, res) => {
   const session = lireSession(req);
   if (!session || !estOwner(session.discordId)) return res.status(403).json({ error: 'owner_only' });
 
@@ -442,15 +511,20 @@ app.post('/api/nouveautes/admins', (req, res) => {
     return res.status(400).json({ error: 'discordId_invalide' });
   }
 
-  const data = chargerDonnees();
-  if (!data.admins.includes(discordId)) {
-    data.admins.push(discordId);
-    sauvegarderDonnees(data);
+  try {
+    const data = await chargerDonnees();
+    if (!data.admins.includes(discordId)) {
+      data.admins.push(discordId);
+      await sauvegarderDonnees(data);
+    }
+    res.json({ ok: true, admins: data.admins });
+  } catch (err) {
+    console.error('Erreur ajout admin :', err.message);
+    res.status(500).json({ error: 'ajout_echoue' });
   }
-  res.json({ ok: true, admins: data.admins });
 });
 
-app.delete('/api/nouveautes/admins/:discordId', (req, res) => {
+app.delete('/api/nouveautes/admins/:discordId', async (req, res) => {
   const session = lireSession(req);
   if (!session || !estOwner(session.discordId)) return res.status(403).json({ error: 'owner_only' });
 
@@ -458,10 +532,15 @@ app.delete('/api/nouveautes/admins/:discordId', (req, res) => {
     return res.status(400).json({ error: 'impossible_de_retirer_le_owner' });
   }
 
-  const data = chargerDonnees();
-  data.admins = data.admins.filter(id => id !== req.params.discordId);
-  sauvegarderDonnees(data);
-  res.json({ ok: true, admins: data.admins });
+  try {
+    const data = await chargerDonnees();
+    data.admins = data.admins.filter(id => id !== req.params.discordId);
+    await sauvegarderDonnees(data);
+    res.json({ ok: true, admins: data.admins });
+  } catch (err) {
+    console.error('Erreur retrait admin :', err.message);
+    res.status(500).json({ error: 'retrait_echoue' });
+  }
 });
 
 app.listen(PORT, () => {
