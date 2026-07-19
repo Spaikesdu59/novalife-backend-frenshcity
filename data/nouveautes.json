@@ -2,5 +2,14 @@
   "admins": [
     "958673417970778114"
   ],
-  "announcements": []
+  "announcements": [
+    {
+      "id": "04bce0b6-a9af-4704-8b79-7462eaa18f8f",
+      "title": "Mise à jour Test site",
+      "content": "aeaeaeaeae",
+      "imageUrl": "https://cdn.discordapp.com/attachments/1528230113596932118/1528361525134360727/1784460182996.png?ex=6a5e0517&is=6a5cb397&hm=628d30f1524fa29ee5c13b31b8867ad024cef86c7f2ccd3447f3b18eebc15e49&",
+      "author": "timeo4351",
+      "createdAt": 1784460183513
+    }
+  ]
 }
