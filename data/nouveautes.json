@@ -2,5 +2,14 @@
   "admins": [
     "958673417970778114"
   ],
-  "announcements": []
+  "announcements": [
+    {
+      "id": "f50c660a-0404-4490-b577-eeeec6fc26af",
+      "title": "Mise à jour Test site",
+      "content": "regarde moi ça comment noah rodriguez est tellement supérieur a vous\n",
+      "imageUrl": "https://cdn.discordapp.com/attachments/1528230113596932118/1528359877217620151/1784459789972.png?ex=6a5e038e&is=6a5cb20e&hm=13b347c5987bb8b225c161285f5e0978e526fedd669e00653c12a355cf956e90&",
+      "author": "timeo4351",
+      "createdAt": 1784459790908
+    }
+  ]
 }
