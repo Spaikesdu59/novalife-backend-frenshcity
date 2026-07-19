@@ -2,14 +2,5 @@
   "admins": [
     "958673417970778114"
   ],
-  "announcements": [
-    {
-      "id": "a007e9d2-f34f-443d-a47f-5fbdfec2c60c",
-      "title": "Mise à jour Test site",
-      "content": "zeaee",
-      "imageUrl": null,
-      "author": "timeo4351",
-      "createdAt": 1784459818401
-    }
-  ]
+  "announcements": []
 }
