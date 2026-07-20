@@ -2,5 +2,14 @@
   "admins": [
     "958673417970778114"
   ],
-  "announcements": []
+  "announcements": [
+    {
+      "id": "e4f47994-e881-40a4-bbc8-3c6e7b873610",
+      "title": "Mise à jour Test site",
+      "content": "blablacar",
+      "imageUrl": "https://cdn.discordapp.com/attachments/1528230113596932118/1528701839699214437/1784541320401.png?ex=6a5f4208&is=6a5df088&hm=d614b4c8192d681ed8c595f817d8a294155602974cf96f683fb996c3d22b3f09&",
+      "author": "timeo4351",
+      "createdAt": 1784541320789
+    }
+  ]
 }
